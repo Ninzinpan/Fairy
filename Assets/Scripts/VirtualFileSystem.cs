@@ -1,121 +1,163 @@
 using System.Collections.Generic;
-using System.Linq; // For LINQ methods like .Select
-using VFS; // IVFSNode, VirtualDirectory, VirtualFile を使うために必要
+using System.Linq;
+using System.Text;
+using VFS;    // IVFSNodeなどのVFS関連クラスを使うために必要
 
 /// <summary>
-/// 仮想ファイルシステム全体を管理し、「現在地」を記憶するクラス。
-/// Manages the entire virtual file system and keeps track of the current location.
+/// 仮想ファイルシステムの全体を管理し、コマンド実行ロジックを持つクラス。
+/// Manages the entire virtual file system and contains command execution logic.
 /// </summary>
 public class VirtualFileSystem
 {
     private readonly VirtualDirectory root;
     public VirtualDirectory CurrentDirectory { get; private set; }
 
-    /// <summary>
-    /// VFSを初期化し、ゲームの世界（ディレクトリ構造）を構築する。
-    /// Initializes the VFS and builds the game world (directory structure).
-    /// </summary>
     public VirtualFileSystem()
     {
-        // 1. ルートディレクトリを作成
         root = new VirtualDirectory("/");
-        
-        // 2. 初期ディレクトリとファイルを作成
-        var homeDir = new VirtualDirectory("home");
-        var forestDir = new VirtualDirectory("forest");
-        
-        var diaryFile = new VirtualFile("diary.txt", "It was a lonely day...\nI decided to create a new friend.");
-        var fairyExe = new VirtualFile("fairy.exe", "This seems to be the core program of this world's guide.");
-
-        // 3. ディレクトリ構造を組み立てる (Add nodes to build the tree)
-        root.AddNode(homeDir);
-        root.AddNode(forestDir);
-        homeDir.AddNode(diaryFile);
-        homeDir.AddNode(fairyExe);
-
-        // 4. 開始時の現在地を設定
-        CurrentDirectory = homeDir;
+        CurrentDirectory = root;
+        InitializeFileSystem();
     }
 
     /// <summary>
-    /// 現在のディレクトリの内容を取得する。
-    /// Gets the contents of the current directory.
+    /// ゲーム開始時に、基本的なディレクトリとファイルを構築します。
+    /// Builds the basic directory and file structure at the start of the game.
     /// </summary>
-    /// <returns>現在のディレクトリに含まれるノードのリスト (A list of nodes in the current directory)</returns>
-    public List<IVFSNode> Ls()
+    private void InitializeFileSystem()
     {
-        return CurrentDirectory.Children.Values.ToList();
+        var forest = new VirtualDirectory("forest");
+        root.AddNode(forest);
+
+        var diary = new VirtualFile("diary.txt", "This is a secret diary...");
+        forest.AddNode(diary);
+        
+        var fairy = new VirtualFile("fairy.exe", "I am Ririn.");
+        root.AddNode(fairy);
     }
 
     /// <summary>
-    /// 指定されたパスにディレクトリを移動する。
-    /// Changes the current directory to the specified path.
+    /// コマンドと引数を受け取り、適切な処理を実行して結果をイベントとして放送します。
+    /// Receives a command and arguments, executes the appropriate action, and broadcasts the result as an event.
     /// </summary>
-    /// <param name="path">移動先のパス (e.g., "forest", "..")</param>
-    /// <returns>エラーメッセージ。成功した場合はnull。 (Error message, or null on success)</returns>
-    public string Cd(string path)
+    public void ExecuteCommand(string command, List<string> arguments)
     {
+        CommandResult result;
+
+        switch (command)
+        {
+            case "echo":
+                result = ExecuteEcho(arguments);
+                break;
+            case "ls":
+                result = ExecuteLs(arguments);
+                break;
+            case "cd":
+                result = ExecuteCd(arguments);
+                break;
+            case "cat":
+                result = ExecuteCat(arguments);
+                break;
+            // --- touchなどの新しいコマンドはここに追加 ---
+            default:
+                result = new CommandResult($"command not found: {command}", isError: true);
+                break;
+        }
+        
+        GameEvents.TriggerCommandExecuted(result);
+    }
+
+    // --- 各コマンドの実行ロジック ---
+
+    private CommandResult ExecuteEcho(List<string> arguments)
+    {
+        // 引数をすべて連結して、そのままコンソール出力として返す。
+        string message = string.Join(" ", arguments);
+        return new CommandResult(message);
+    }
+    
+    private CommandResult ExecuteLs(List<string> arguments)
+    {
+        // (このコマンドは今のところ引数を使いませんが、将来の拡張のために引数を取れるようにしておきます)
+        var output = new StringBuilder();
+        var nodes = new List<IVFSNode>();
+
+        // 名前順でソートして表示
+        foreach (var node in CurrentDirectory.Children.Values.OrderBy(n => n.Name))
+        {
+            string displayName = node is VirtualDirectory ? $"{node.Name}/" : node.Name;
+            output.AppendLine(displayName);
+            nodes.Add(node);
+        }
+
+        // 末尾の余分な改行を削除して返す
+        return new CommandResult(output.ToString().TrimEnd(), nodes);
+    }
+
+   
+    private CommandResult ExecuteCd(List<string> arguments)
+    {
+        if (arguments.Count == 0)
+        {
+            // 引数がない場合はエラーメッセージを返す
+            return new CommandResult("path required", isError: true);
+        }
+
+        string path = arguments[0];
+
         if (path == "..")
         {
             if (CurrentDirectory.Parent != null)
             {
                 CurrentDirectory = CurrentDirectory.Parent;
-                return null; // 成功
             }
-            return "cd: already at root directory";
+            // 成功時はコンソール出力を空にするため、空文字列("")を渡す
+            return new CommandResult(""); 
         }
         
-        if (path == "/" || path == "~")
-        {
-            CurrentDirectory = root;
-            return null; // 成功
-        }
-        
+        // 大文字・小文字を区別せずにディレクトリを検索
         if (CurrentDirectory.Children.TryGetValue(path.ToLower(), out IVFSNode node))
         {
-            if (node is VirtualDirectory targetDir)
+            if (node is VirtualDirectory targetDirectory)
             {
-                CurrentDirectory = targetDir;
-                return null; // 成功
+                CurrentDirectory = targetDirectory;
+                return new CommandResult(""); // 成功
             }
-            return $"cd: not a directory: {path}";
+            else
+            {
+                return new CommandResult($"not a directory: {path}", isError: true);
+            }
         }
-        
-        return $"cd: no such file or directory: {path}";
+        else
+        {
+            return new CommandResult($"no such file or directory: {path}", isError: true);
+        }
     }
 
-    /// <summary>
-    /// 指定されたファイルの内容を取得する。
-    /// Gets the content of the specified file.
-    /// </summary>
-    /// <param name="filename">ファイル名</param>
-    /// <returns>ファイルの中身、またはエラーメッセージ (Tuple of content and error message)</returns>
-    public (string content, string error) Cat(string filename)
+    private CommandResult ExecuteCat(List<string> arguments)
     {
+        if (arguments.Count == 0)
+        {
+            return new CommandResult("filename required", isError: true);
+        }
+
+        string filename = arguments[0];
+        
         if (CurrentDirectory.Children.TryGetValue(filename.ToLower(), out IVFSNode node))
         {
             if (node is VirtualFile targetFile)
             {
-                return (targetFile.Content, null); // 成功
+                // ファイルの中身をそのままコンソール出力として返す
+                return new CommandResult(targetFile.Content);
             }
-            return (null, $"cat: {filename} is a directory");
+            else
+            {
+                return new CommandResult($"is a directory: {filename}", isError: true);
+            }
         }
-
-        return (null, $"cat: no such file: {filename}");
-    }
-    public string Pwd()
-    {
-        List<string> pathParts = new List<string>();
-        VirtualDirectory current = CurrentDirectory;
-
-        while (current != null && current != root)
+        else
         {
-            pathParts.Add(current.Name);
-            current = current.Parent;
+            return new CommandResult($"no such file: {filename}", isError: true);
         }
-
-        pathParts.Reverse();
-        string path = "/" + string.Join("/", pathParts);
-        return path;
     }
 }
+
