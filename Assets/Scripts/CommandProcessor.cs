@@ -1,58 +1,117 @@
-using System.Linq; // LINQを扱うために必要
+using System.Linq;
+using System.Text;
+using VFS; // VirtualFileSystem を使うために必要
 
 /// <summary>
-/// ユーザーからのコマンド文字列を解釈し、結果を返すクラス。
-/// Unityの機能（MonoBehaviour）には依存しない。
+/// コマンドを解釈し、VFSを操作し、結果をイベントとして発行するクラス（Publisher）。
+/// Interprets commands, manipulates the VFS, and publishes the results as events.
 /// </summary>
 public class CommandProcessor
 {
+    private readonly VirtualFileSystem vfs;
+
+    public CommandProcessor()
+    {
+        // このクラスが作られると同時に、VFS（ゲームの世界）も生成される
+        vfs = new VirtualFileSystem();
+    }
+
     /// <summary>
-    /// 入力されたコマンドラインを処理する。
+    /// 入力されたコマンドラインを処理し、結果をイベントとして放送する。
+    /// 返り値は void になった。
+    /// Processes the input command line and broadcasts the result as an event. Returns void now.
     /// </summary>
     /// <param name="inputLine">ユーザーが入力した一行の文字列</param>
-    /// <returns>コマンドの実行結果</returns>
-    public string Process(string inputLine)
+    public void Process(string inputLine)
     {
-        // nullや空白のみの場合は何もせずに空文字を返す
+        CommandResult result;
+
         if (string.IsNullOrWhiteSpace(inputLine))
         {
-            return "";
+            // 空の入力は何もしないが、空の成功結果を返すこともできる
+            result = new CommandResult("");
+            GameEvents.TriggerCommandExecuted(result);
+            return;
         }
 
-        // 入力文字列の前後の空白を削除し、スペースで分割する
-        // 例: "echo  hello world " -> ["echo", "hello", "world"]
         string[] parts = inputLine.Trim().Split(' ');
+        string command = parts[0].ToLower();
 
-        // 最初の部分をコマンドとして解釈する
-        string command = parts[0].ToLower(); // コマンドは大文字・小文字を区別しないように小文字に変換
-
-        // コマンドに応じて処理を分岐する
         switch (command)
         {
             case "echo":
-                return ExecuteEcho(parts);
-
-            // --- 今後、ここに新しいコマンドのcaseを追加していく ---
-            // case "ls":
-            //     return ExecuteLs(parts);
-            
+                result = ExecuteEcho(parts);
+                break;
+            case "ls":
+                result = ExecuteLs();
+                break;
+            case "cd":
+                result = ExecuteCd(parts);
+                break;
+            case "cat":
+                result = ExecuteCat(parts);
+                break;
+            case "pwd":
+                result = ExecutePwd();
+                break;
             default:
-                return $"command not found: {command}";
+                result = new CommandResult($"command not found: {command}", isError: true);
+                break;
         }
+        
+        // 完成した CommandResult を GameEvents を通じて放送する
+        GameEvents.TriggerCommandExecuted(result);
     }
 
-    /// <summary>
-    /// echoコマンドを実行する。
-    /// </summary>
-    /// <param name="arguments">コマンド名を含む、分割された文字列配列</param>
-    /// <returns>echoの結果</returns>
-    private string ExecuteEcho(string[] arguments)
+    private CommandResult ExecuteEcho(string[] arguments)
     {
-        // arguments配列からコマンド名("echo")を除いた部分を取得し、
-        // もう一度スペースで連結して一つの文字列に戻す。
-        // 例: ["echo", "hello", "world"] -> "hello world"
         string message = string.Join(" ", arguments.Skip(1));
-        
-        return message;
+        return new CommandResult(message);
     }
+
+    private CommandResult ExecuteLs()
+    {
+        var nodes = vfs.Ls();
+        var output = new StringBuilder();
+        foreach (var node in nodes)
+        {
+            // ディレクトリの場合は名前に / をつけるなど、見た目を整形
+            string displayName = node is VirtualDirectory ? $"{node.Name}/" : node.Name;
+            output.AppendLine(displayName);
+        }
+        
+        // コンソール用の整形済みテキストと、シーン表示用の生データの両方を渡す
+        return new CommandResult(output.ToString(), nodes);
+    }
+
+    private CommandResult ExecuteCd(string[] arguments)
+    {
+        if (arguments.Length < 2)
+        {
+            return new CommandResult("cd: path required", isError: true);
+        }
+        
+        string error = vfs.Cd(arguments[1]);
+        
+        // エラーがあればそれを結果として返す。成功すれば何も表示しない。
+        return new CommandResult(error ?? "", isError: error != null);
+    }
+
+    private CommandResult ExecuteCat(string[] arguments)
+    {
+        if (arguments.Length < 2)
+        {
+            return new CommandResult("cat: filename required", isError: true);
+        }
+
+        var (content, error) = vfs.Cat(arguments[1]);
+
+        return new CommandResult(content ?? error, isError: error != null);
+    }
+    private CommandResult ExecutePwd()
+    {
+        string path = vfs.Pwd();
+        return new CommandResult(path);
+    }
+
 }
