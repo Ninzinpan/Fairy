@@ -4,7 +4,7 @@ using UnityEngine.UI;
 using TMPro;
 using System.Text;
 using System.Collections;
-
+using Events;
 /// <summary>
 /// PowerShell風の単一テキストエリアでコンソールを管理するクラス。
 /// GameEventsを購読し、結果を画面に表示する（Subscriber）。
@@ -28,8 +28,10 @@ public class ConsoleManager : MonoBehaviour
     // CommandProcessorのインスタンスを保持するように修正
     private CommandProcessor commandProcessor;
     private PlayerControls playerControls;
-    
+
     private readonly StringBuilder currentInput = new StringBuilder();
+    public CommandProcessor CommandProcessorInstance => commandProcessor;
+
     private bool isInputActive = true;
     private float cursorTimer;
     private bool isCursorVisible;

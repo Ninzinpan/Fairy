@@ -9,6 +9,7 @@ public class CommandProcessor
 {
     // readonly にすることで、このクラス内での再代入を防ぎます。
     private readonly VirtualFileSystem vfs;
+    public VirtualFileSystem VfsInstance => vfs;
 
     public CommandProcessor()
     {
