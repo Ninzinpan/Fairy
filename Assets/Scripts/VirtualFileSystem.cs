@@ -27,7 +27,7 @@ public class VirtualFileSystem
 
         var diary = new VirtualFile("diary.txt", "This is a secret diary...");
         forest.AddNode(diary);
-        for (int n = 1; n <= 10; n++)
+        for (int n = 1; n <= 100; n++)
         {
             var tree = new VirtualDirectory($"tree{n}");
                         forest.AddNode(tree);
