@@ -2,7 +2,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using VFS;    // IVFSNodeなどのVFS関連クラスを使うために必要
-using Events; // CommandResultやGameEventsを使うために必要
+using Events;
+using Unity.VisualScripting.Dependencies.NCalc; // CommandResultやGameEventsを使うために必要
 /// <summary>
 /// 仮想ファイルシステムの全体を管理し、コマンド実行ロジックを持つクラス。
 /// Manages the entire virtual file system and contains command execution logic.
@@ -26,7 +27,13 @@ public class VirtualFileSystem
 
         var diary = new VirtualFile("diary.txt", "This is a secret diary...");
         forest.AddNode(diary);
-        
+        for (int n = 1; n <= 10; n++)
+        {
+            var tree = new VirtualDirectory($"tree{n}");
+                        forest.AddNode(tree);
+
+        }
+
         var fairy = new VirtualFile("fairy.exe", "I am Ririn.");
         root.AddNode(fairy);
     }
