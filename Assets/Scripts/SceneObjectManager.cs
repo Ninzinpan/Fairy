@@ -97,8 +97,8 @@ public class SceneObjectManager : MonoBehaviour
                     // ★★★ ここが重要 ★★★
                     // 生成直後に、マネージャーが非表示を命令する
                     // IVFSObjectViewにはHide()がないため、具体的な型にキャストして呼び出す
-                    if (view is FileView fileView) fileView.Hide();
-                    else if (view is DirectoryView dirView) dirView.Hide();
+                    //if (view is FileView fileView) fileView.Hide();
+                    //else if (view is DirectoryView dirView) dirView.Hide();
                 }
                 itemCount++;
             }
