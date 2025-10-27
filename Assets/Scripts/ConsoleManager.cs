@@ -4,79 +4,77 @@ using UnityEngine.UI;
 using TMPro;
 using System.Text;
 using System.Collections;
-using Events; // CommandResult, GameEventsを使うために必要
+using System.Linq; // Splitなどを使うために必要
+using Events; // CommandResultを使うために必要
 
 /// <summary>
 /// PowerShell風の単一テキストエリアでコンソールを管理するクラス。
-/// イベントシステムからの指示に応じて入力制御やテキスト表示も行う。
+/// Manages the console using a single text area like PowerShell.
 /// </summary>
 public class ConsoleManager : MonoBehaviour
 {
     [Header("UI Components")]
-    [SerializeField]
-    private TMP_Text consoleText;
-    [SerializeField]
-    private ScrollRect scrollRect;
+    [SerializeField] private TMP_Text consoleText;
+    [SerializeField] private ScrollRect scrollRect;
 
     [Header("Console Settings")]
-    [SerializeField]
-    private string prompt = "> "; // プロンプトの後ろにスペースを追加
-    [SerializeField]
-    private char cursorChar = '_';
-    [SerializeField]
-    private float cursorBlinkRate = 0.5f;
+    [SerializeField] private string prompt = ">";
+    [SerializeField] private char cursorChar = '_';
+    [SerializeField] private float cursorBlinkRate = 0.5f;
 
-    // CommandProcessorのインスタンスを保持
-    private readonly CommandProcessor commandProcessor = new CommandProcessor(); // readonlyに変更
-    private PlayerControls playerControls;
+    // ★★★ InputCensorへの参照を追加 ★★★
+    [Header("Dependencies")]
+    [SerializeField] private InputCensor inputCensor;
 
-    // 履歴と現在の入力をStringBuilderで管理
-    private readonly StringBuilder consoleHistory = new StringBuilder();
-    private readonly StringBuilder currentInput = new StringBuilder();
+    // CommandProcessorは内部で持ち、外部公開用プロパティを用意
+    private readonly CommandProcessor commandProcessor = new CommandProcessor();
     public CommandProcessor CommandProcessorInstance => commandProcessor;
 
-    private bool isInputActive = true; // 通常のコマンド入力が有効か
+    private PlayerControls playerControls;
+    private readonly StringBuilder consoleHistory = new StringBuilder();
+    private readonly StringBuilder currentInput = new StringBuilder();
+    private bool isInputActive = true;
     private float cursorTimer;
     private bool isCursorVisible;
-    private bool isWaitingForEventInput = false; // イベント進行のEnter待ちフラグ
+
+    // イベント中にEnterキー入力を待つためのフラグ
+    private bool waitingForEventInput = false;
 
     void Awake()
     {
-        // commandProcessor は readonly なので Awake で new する
         playerControls = new PlayerControls();
+        // InputCensorがnullでないか確認 (インスペクター設定忘れ防止)
+        if (inputCensor == null)
+        {
+            Debug.LogError("ConsoleManager: InputCensor is not assigned in the inspector!", this);
+        }
     }
 
     void OnEnable()
     {
-        GameEvents.OnCommandExecuted += OnCommandResultReceived;
-
         playerControls.Console.Enable();
-        playerControls.Console.Submit.performed += OnSubmitPressed; // ハンドラ変更
+        playerControls.Console.Submit.performed += OnSubmitCommand;
         playerControls.Console.Backspace.performed += OnBackspace;
         Keyboard.current.onTextInput += OnTextInput;
+        GameEvents.OnCommandExecuted += OnCommandResultReceived; // 結果表示のために購読
     }
 
     void OnDisable()
     {
-        GameEvents.OnCommandExecuted -= OnCommandResultReceived;
-
-        // OnEnableで登録したものを解除
-        if (playerControls != null)
-        {
-             playerControls.Console.Submit.performed -= OnSubmitPressed; // ハンドラ変更
-             playerControls.Console.Backspace.performed -= OnBackspace;
-             playerControls.Console.Disable();
-        }
+        playerControls.Console.Submit.performed -= OnSubmitCommand;
+        playerControls.Console.Backspace.performed -= OnBackspace;
+        playerControls.Console.Disable();
 
         if (Keyboard.current != null)
         {
             Keyboard.current.onTextInput -= OnTextInput;
         }
+        GameEvents.OnCommandExecuted -= OnCommandResultReceived;
     }
 
     void Update()
     {
-        // 通常入力モードの時だけカーソルを点滅
+        // 通常の入力時のみカーソル点滅
         if (isInputActive)
         {
             cursorTimer += Time.deltaTime;
@@ -84,151 +82,99 @@ public class ConsoleManager : MonoBehaviour
             {
                 cursorTimer = 0;
                 isCursorVisible = !isCursorVisible;
-                UpdateConsoleText(); // 表示更新
+                UpdateInputLineDisplay(); // カーソル点滅のために再描画
             }
         }
     }
 
-    /// <summary>
-    /// GameEventsからコマンド実行結果を受け取る
-    /// </summary>
-    private void OnCommandResultReceived(CommandResult result)
-    {
-        // 結果が空でなければ履歴に追加
-        if (!string.IsNullOrEmpty(result.ConsoleOutput))
-        {
-            AddToHistory(result.ConsoleOutput.TrimEnd());
-        }
-
-        UpdateConsoleText(); // 表示更新
-        ScrollToBottom(); // スクロール
-    }
-
     private void OnTextInput(char character)
     {
-        if (!isInputActive || char.IsControl(character)) return;
-
+        // イベント中は通常の文字入力を無視
+        if (!isInputActive || waitingForEventInput || char.IsControl(character)) return;
         currentInput.Append(character);
         ResetCursorBlink();
-        UpdateConsoleText();
+        UpdateInputLineDisplay();
     }
 
     private void OnBackspace(InputAction.CallbackContext context)
     {
-        if (!isInputActive || currentInput.Length <= 0) return;
-
+         // イベント中はBackspaceを無視
+        if (!isInputActive || waitingForEventInput || currentInput.Length <= 0) return;
         currentInput.Length--;
         ResetCursorBlink();
-        UpdateConsoleText();
+        UpdateInputLineDisplay();
     }
 
     /// <summary>
-    /// Submitアクション（Enterキー）が押されたときの処理を振り分ける
+    /// Enterキーが押された時の処理。
+    /// イベント入力待ちか、通常のコマンド入力かで処理を分岐。
     /// </summary>
-    private void OnSubmitPressed(InputAction.CallbackContext context)
+    private void OnSubmitCommand(InputAction.CallbackContext context)
     {
-        if (isWaitingForEventInput)
+        // イベント入力待機中なら、フラグを解除するだけ
+        if (waitingForEventInput)
         {
-            // イベント進行待ちの場合、フラグを折るだけ
-            isWaitingForEventInput = false;
+            waitingForEventInput = false;
+            return;
         }
-        else if (isInputActive)
-        {
-            // 通常のコマンド入力の場合
-            SubmitCommand();
-        }
-    }
 
-    /// <summary>
-    /// 現在の入力内容でコマンドを実行する
-    /// </summary>
-    private void SubmitCommand()
-    {
-        string command = currentInput.ToString();
-        if (string.IsNullOrWhiteSpace(command)) return;
+        // 通常のコマンド入力処理
+        if (!isInputActive || inputCensor == null) return;
 
-        // 履歴に自分の入力を追加
-        AddToHistory(prompt + command);
+        string commandLine = currentInput.ToString();
 
-        // 入力欄をクリア
+        consoleHistory.Append(prompt).Append(commandLine).Append("\n");
         ClearInputLine();
+        UpdateConsoleHistoryDisplay();
 
-        // CommandProcessorに処理を依頼
-        commandProcessor.Process(command); // VFSが結果をイベントで放送する
-
-        // 表示更新とスクロール
-        UpdateConsoleText();
-        ScrollToBottom();
-
-        ResetCursorBlink();
-    }
-
-    /// <summary>
-    /// イベントテキストを改行区切りで表示し、Enterキーで次に進めるコルーチン
-    /// </summary>
-    public IEnumerator ShowEventTextCoroutine(string message)
-    {
-        UpdateConsoleText(isEvent: true); // 入力行を非表示にする
-
-        string[] lines = message.Split('\n');
-
-        foreach (string line in lines)
+        if (string.IsNullOrWhiteSpace(commandLine))
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            AddToHistory(line); // 1行履歴に追加
-            UpdateConsoleText(isEvent: true); // 表示更新 (イベント中)
-            ScrollToBottom(); // スクロール
-
-            // Enterキーが押されるまで待機
-            isWaitingForEventInput = true;
-            yield return new WaitUntil(() => !isWaitingForEventInput);
-        }
-    }
-
-    /// <summary>
-    /// 通常のコマンド入力を有効にする
-    /// </summary>
-    public void ActivateInput()
-    {
-        isInputActive = true;
-        ResetCursorBlink();
-        UpdateConsoleText(); // 入力行を表示
-    }
-
-    /// <summary>
-    /// 通常のコマンド入力を無効にする
-    /// </summary>
-    public void DeactivateInput()
-    {
-        isInputActive = false;
-        isCursorVisible = false; // カーソル非表示
-        UpdateConsoleText(isEvent: true); // 入力行を非表示
-    }
-
-    /// <summary>
-    /// コンソール全体のテキスト表示を更新する。
-    /// </summary>
-    /// <param name="isEvent">イベント表示中か</param>
-    private void UpdateConsoleText(bool isEvent = false)
-    {
-        var displayText = new StringBuilder();
-        displayText.Append(consoleHistory); // 履歴
-
-        // 通常入力モードの場合のみプロンプトと入力行を表示
-        if (!isEvent && isInputActive)
-        {
-             displayText.Append(prompt);
-             displayText.Append(currentInput);
-             if (isCursorVisible) // カーソル
-             {
-                 displayText.Append(cursorChar);
-             }
+             StartCoroutine(ScrollToBottom());
+             ResetCursorBlink();
+             UpdateInputLineDisplay();
+            return;
         }
 
+        inputCensor.ProcessInput(commandLine);
+    }
+
+    private void OnCommandResultReceived(CommandResult result)
+    {
+        // イベント再生中はコマンド結果を追加しない（イベントテキスト表示に任せる）
+        if (waitingForEventInput) return;
+
+        if (!string.IsNullOrEmpty(result.ConsoleOutput))
+        {
+            consoleHistory.Append(result.ConsoleOutput).Append("\n");
+        }
+        ResetCursorBlink();
+        UpdateConsoleHistoryDisplay();
+        UpdateInputLineDisplay();
+        StartCoroutine(ScrollToBottom());
+    }
+
+    private void UpdateConsoleHistoryDisplay()
+    {
+         consoleText.text = consoleHistory.ToString();
+    }
+
+    private void UpdateInputLineDisplay()
+    {
+        var displayText = new StringBuilder(consoleHistory.ToString());
+        displayText.Append(prompt);
+        displayText.Append(currentInput);
+        // 通常入力時のみカーソル表示
+        if (isInputActive && isCursorVisible && !waitingForEventInput)
+        {
+            displayText.Append(cursorChar);
+        }
         consoleText.text = displayText.ToString();
     }
 
+    private void ClearInputLine()
+    {
+        currentInput.Clear();
+    }
 
     private void ResetCursorBlink()
     {
@@ -236,27 +182,65 @@ public class ConsoleManager : MonoBehaviour
         cursorTimer = 0;
     }
 
-    private void ScrollToBottom()
+    private IEnumerator ScrollToBottom()
     {
-        StartCoroutine(ScrollToBottomCoroutine());
+        // UIレイアウトが更新されるのを待つ
+        yield return null; // 1フレーム待つだけで十分な場合が多い
+        yield return new WaitForEndOfFrame();
+        scrollRect.verticalNormalizedPosition = 0f;
     }
 
-    private IEnumerator ScrollToBottomCoroutine()
+    // --- EventManagerから呼ばれるメソッド ---
+    public void ActivateInput()
     {
-         // Wait for end of frame ensures layout is updated before scrolling
-         yield return new WaitForEndOfFrame();
-         if (scrollRect != null) scrollRect.verticalNormalizedPosition = 0f;
+        isInputActive = true;
+        waitingForEventInput = false; // イベント入力待機も解除
+        ResetCursorBlink();
+        UpdateInputLineDisplay();
+        StartCoroutine(ScrollToBottom()); // ★★★ イベント終了後にもスクロールを実行 ★★★
     }
 
-    // --- 履歴と入力行の内部管理用ヘルパー ---
-    private void AddToHistory(string line)
+    public void DeactivateInput()
     {
-        consoleHistory.Append(line).Append("\n");
+        isInputActive = false;
+        waitingForEventInput = false; // 念のため
+        UpdateInputLineDisplay(); // カーソルを消す
     }
 
-    private void ClearInputLine()
+    /// <summary>
+    /// イベントテキストを1行ずつ表示し、Enterキー入力を待つコルーチン。
+    /// </summary>
+    public IEnumerator ShowEventTextCoroutine(string message)
     {
-        currentInput.Clear();
+        // 入力行を消して履歴だけ表示
+        UpdateConsoleHistoryDisplay();
+
+        // メッセージを改行で分割
+        string[] lines = message.Split('\n');
+
+        foreach (string line in lines)
+        {
+            // 1行追加して表示
+            consoleHistory.Append(line).Append("\n");
+            consoleText.text = consoleHistory.ToString();
+            yield return ScrollToBottom(); // スクロール完了を待つ
+
+            // Enterキー入力を待つ
+            waitingForEventInput = true;
+            // waitingForEventInputがfalseになるまで待機
+            yield return new WaitUntil(() => !waitingForEventInput);
+        }
+        // イベントテキスト表示後は、自動で入力は再開しない
+        // EventManagerがActivateInput()を呼ぶ責任を持つ
+    }
+
+    // EventManagerからの会話表示用 (待機なし、プロンプトなし)
+    public void ShowDialogueText(string text)
+    {
+         consoleHistory.Append(text).Append("\n");
+         UpdateConsoleHistoryDisplay();
+         // イベント中は入力行を表示しないのでUpdateInputLineDisplayは呼ばない
+         StartCoroutine(ScrollToBottom());
     }
 }
 

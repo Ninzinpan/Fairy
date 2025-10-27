@@ -11,6 +11,7 @@ public class CommandEventInterpreter : MonoBehaviour
     [SerializeField] private EventManager eventManager; // イベント再生を依頼する相手
     [SerializeField] private ConsoleManager consoleManager; // VFSインスタンス取得用 (VFSの状態を見る場合に備えて)
 
+    [SerializeField] private InputCensor inputCensor;
     // --- ゲーム進行状況フラグ ---
     private bool hasEnteredHome = false; // /home に入ったことがあるか
     private bool isFindUnlocked = false;
@@ -78,6 +79,11 @@ public class CommandEventInterpreter : MonoBehaviour
             isFindUnlocked = true;
             Debug.Log("Event Triggered: FindUnlocked");
             eventManager.EnqueueEvent("FindUnlocked");
+            // ★★★ InputCensorにコマンド解放を通知 ★★★
+        if (inputCensor != null)
+        {
+            inputCensor.AddAllowedCommand("find");
+        }
             return; // イベントが発生したら他はチェックしない
         }
 
@@ -90,6 +96,10 @@ public class CommandEventInterpreter : MonoBehaviour
             isCatUnlocked = true;
             Debug.Log("Event Triggered: CatUnlocked");
             eventManager.EnqueueEvent("CatUnlocked");
+            if (inputCensor != null)
+            {
+                inputCensor.AddAllowedCommand("cat");
+            }
             return; // イベントが発生したら他はチェックしない
         }
 
